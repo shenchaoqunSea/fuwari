@@ -85,125 +85,31 @@ function fileToBase64(file: File): Promise<string> {
 	});
 }
 
-// 使用 Git Tree API 一次性提交多个文件
-async function commitMultipleFiles(
-	files: Array<{ path: string; content: string }>,
-	commitMessage: string,
+// 使用简单的文件上传方式（更稳定）
+async function uploadFileToGitHub(
+	path: string,
+	content: string,
+	message: string,
 ): Promise<void> {
-	// 1. 获取当前 HEAD 的 SHA
-	const headResponse = await fetch(
-		`https://api.github.com/repos/${githubRepo}/git/ref/heads/main`,
-	);
-	const headData = await headResponse.json();
-	const headSha = headData.object.sha;
-
-	// 2. 获取最新 commit 的 SHA
-	const commitResponse = await fetch(
-		`https://api.github.com/repos/${githubRepo}/commits/main`,
-	);
-	const commitData = await commitResponse.json();
-	const lastCommitSha = commitData.sha;
-	const treeSha = commitData.tree.sha;
-
-	// 3. 创建新的 tree 对象
-	const treeItems = [];
-
-	// 获取当前 tree 的内容
-	const treeResponse = await fetch(
-		`https://api.github.com/repos/${githubRepo}/git/trees/${treeSha}?recursive=1`,
-	);
-	const treeData = await treeResponse.json();
-
-	// 添加现有文件到新的 tree（除了我们要覆盖的文件）
-	const filePathsToUpdate = files.map((f) => f.path);
-	treeData.tree.forEach((item: { path: string; sha: string; type: string }) => {
-		if (
-			item.type === "blob" &&
-			!filePathsToUpdate.some((path) => item.path.startsWith(path))
-		) {
-			treeItems.push({
-				path: item.path,
-				mode: "100644",
-				type: "blob",
-				sha: item.sha,
-			});
-		}
-	});
-
-	// 4. 为每个新文件创建 blob
-	for (const file of files) {
-		const blobResponse = await fetch(
-			`https://api.github.com/repos/${githubRepo}/git/blobs`,
-			{
-				method: "POST",
-				headers: {
-					Authorization: `Bearer ${githubToken}`,
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify({
-					content: file.content,
-					encoding: "base64",
-				}),
+	const response = await fetch(
+		`https://api.github.com/repos/${githubRepo}/contents/${path}`,
+		{
+			method: "PUT",
+			headers: {
+				Authorization: `Bearer ${githubToken}`,
+				"Content-Type": "application/json",
 			},
-		);
-		const blobData = await blobResponse.json();
+			body: JSON.stringify({
+				message,
+				content,
+			}),
+		},
+	);
 
-		treeItems.push({
-			path: file.path,
-			mode: "100644",
-			type: "blob",
-			sha: blobData.sha,
-		});
+	if (!response.ok) {
+		const error = await response.json();
+		throw new Error(error.message || `Failed to upload ${path}`);
 	}
-
-	// 5. 创建新的 tree
-	const newTreeResponse = await fetch(
-		`https://api.github.com/repos/${githubRepo}/git/trees`,
-		{
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${githubToken}`,
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify({
-				tree: treeItems,
-			}),
-		},
-	);
-	const newTreeData = await newTreeResponse.json();
-
-	// 6. 创建新的 commit
-	const newCommitResponse = await fetch(
-		`https://api.github.com/repos/${githubRepo}/git/commits`,
-		{
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${githubToken}`,
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify({
-				message: commitMessage,
-				tree: newTreeData.sha,
-				parents: [lastCommitSha],
-			}),
-		},
-	);
-	const newCommitData = await newCommitResponse.json();
-
-	// 7. 更新 HEAD 引用
-	await fetch(
-		`https://api.github.com/repos/${githubRepo}/git/refs/heads/main`,
-		{
-			method: "PATCH",
-			headers: {
-				Authorization: `Bearer ${githubToken}`,
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify({
-				sha: newCommitData.sha,
-			}),
-		},
-	);
 }
 
 async function publishPost() {
@@ -247,23 +153,6 @@ async function publishPost() {
 			imagesPath = `src/content/posts/${title}/images/`;
 		}
 
-		// 准备所有要提交的文件
-		const filesToCommit = [];
-
-		// 如果有图片，添加图片文件
-		if (selectedFiles.length > 0) {
-			isUploadingImages = true;
-			publishResult = "📤 正在准备图片...";
-
-			for (const file of selectedFiles) {
-				const base64 = await fileToBase64(file);
-				filesToCommit.push({
-					path: `${imagesPath}${file.name}`,
-					content: base64,
-				});
-			}
-		}
-
 		// 更新内容中的图片路径
 		let finalContent = content;
 		if (selectedFiles.length > 0) {
@@ -293,18 +182,33 @@ lang: zh_CN
 ${finalContent}
 `;
 
-		// 添加文章文件
-		filesToCommit.push({
-			path: filePath,
-			content: btoa(unescape(encodeURIComponent(frontmatter))),
-		});
+		// 先上传图片
+		if (selectedFiles.length > 0) {
+			isUploadingImages = true;
+			publishResult = `📤 正在上传 ${selectedFiles.length} 张图片...`;
 
-		// 一次性提交所有文件（图片 + 文章）
-		isUploadingImages = false;
-		isPublishing = true;
-		publishResult = "🚀 正在提交到 GitHub...";
+			for (let i = 0; i < selectedFiles.length; i++) {
+				const file = selectedFiles[i];
+				try {
+					const base64 = await fileToBase64(file);
+					await uploadFileToGitHub(
+						`${imagesPath}${file.name}`,
+						base64,
+						`Upload: ${file.name}`,
+					);
+					publishResult = `📤 上传进度: ${i + 1}/${selectedFiles.length}`;
+				} catch (error) {
+					console.error(`Failed to upload ${file.name}:`, error);
+					alert(`图片 ${file.name} 上传失败: ${error}`);
+				}
+			}
+		}
 
-		await commitMultipleFiles(filesToCommit, `发布文章: ${title}`);
+		// 再上传文章
+		publishResult = "📝 正在保存文章...";
+		const articleBase64 = btoa(unescape(encodeURIComponent(frontmatter)));
+
+		await uploadFileToGitHub(filePath, articleBase64, `发布文章: ${title}`);
 
 		publishResult = "✅ 发布成功！GitHub Actions 正在构建...";
 
@@ -348,7 +252,7 @@ function openTokenSettings() {
 <div class="bg-white dark:bg-neutral-900 rounded-2xl shadow-lg p-6 space-y-6">
 	<!-- 文章类型选择 -->
 	<div>
-		<label class="block text-sm font-medium mb-2">文章类型</label>
+		<label className="block text-sm font-medium mb-2">文章类型</label>
 		<div class="flex gap-3">
 			<button
 				class="flex-1 py-3 px-4 rounded-xl font-medium transition {postType === 'wechat'
@@ -373,7 +277,7 @@ function openTokenSettings() {
 
 	<!-- 标题 -->
 	<div>
-		<label class="block text-sm font-medium mb-2">标题</label>
+		<label className="block text-sm font-medium mb-2">标题</label>
 		<input
 			type="text"
 			bind:value={title}
@@ -385,7 +289,7 @@ function openTokenSettings() {
 	<!-- 标签（仅普通文章显示） -->
 	{#if postType === "normal"}
 		<div>
-			<label class="block text-sm font-medium mb-2">标签（可选，用逗号分隔）</label>
+			<label className="block text-sm font-medium mb-2">标签（可选，用逗号分隔）</label>
 			<input
 				type="text"
 				bind:value={tags}
@@ -397,7 +301,7 @@ function openTokenSettings() {
 
 	<!-- 图片上传 - 移动端优化 -->
 	<div>
-		<label class="block text-sm font-medium mb-2">图片（可选）</label>
+		<label className="block text-sm font-medium mb-2">图片（可选）</label>
 
 		<!-- 移动端图片选择按钮 -->
 		<div class="grid grid-cols-2 gap-3 mb-3">
@@ -475,14 +379,14 @@ function openTokenSettings() {
 
 			<!-- 上传提示 -->
 			<div class="text-xs text-neutral-500 dark:text-neutral-400 px-2">
-				💡 图片将和文章一起提交（单个 commit）
+				💡 图片会先上传，然后保存文章
 			</div>
 		{/if}
 	</div>
 
 	<!-- 内容 -->
 	<div>
-		<label class="block text-sm font-medium mb-2">内容（支持 Markdown）</label>
+		<label className="block text-sm font-medium mb-2">内容（支持 Markdown）</label>
 		<textarea
 			bind:value={content}
 			rows="12"
@@ -514,7 +418,9 @@ function openTokenSettings() {
 			disabled={isPublishing}
 			class="flex-1 px-6 py-3 rounded-xl font-medium transition bg-[var(--primary)] text-white hover:opacity-90 disabled:opacity-50"
 		>
-			{#if isPublishing}
+			{#if isUploadingImages}
+				📤 上传中...
+			{:else if isPublishing}
 				🚀 发布中...
 			{:else}
 				🚀 发布
