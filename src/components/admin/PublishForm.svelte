@@ -337,7 +337,6 @@ ${finalContent}
         <div class="grid grid-cols-2 gap-3 mb-3">
             <!-- 相册按钮 -->
             <label class="flex items-center justify-center gap-2 py-4 px-4 rounded-xl border-2 border-dashed border-neutral-300 dark:border-neutral-700 cursor-pointer hover:border-[var(--primary)] hover:bg-neutral-50 dark:hover:bg-neutral-800 transition">
-                <span class="text-2xl">🖼️</span>
                 <span class="text-sm font-medium">相册</span>
                 <input
                     type="file"
@@ -350,7 +349,6 @@ ${finalContent}
 
             <!-- 拍照按钮 -->
             <label class="flex items-center justify-center gap-2 py-4 px-4 rounded-xl border-2 border-dashed border-neutral-300 dark:border-neutral-700 cursor-pointer hover:border-[var(--primary)] hover:bg-neutral-50 dark:hover:bg-neutral-800 transition">
-                <span class="text-2xl">📷</span>
                 <span class="text-sm font-medium">拍照</span>
                 <input
                     type="file"
